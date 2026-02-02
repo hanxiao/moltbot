@@ -118,6 +118,41 @@ function appendFileBlocks(body: string | undefined, blocks: string[]): string {
   return `${base}\n\n${suffix}`.trim();
 }
 
+/**
+ * Known binary file magic bytes that may have high null-byte or printable-ASCII
+ * ratios but are definitely not text. Binary files (e.g. Ogg/Opus audio) can
+ * have ~39% null bytes, fooling the UTF-16 heuristic, and ASCII-heavy headers
+ * (e.g. "OggS", "OpusHead") that fool the printable-byte ratio.
+ */
+const BINARY_MAGIC_SIGNATURES: Array<{ offset: number; bytes: number[] }> = [
+  { offset: 0, bytes: [0x4f, 0x67, 0x67, 0x53] }, // OggS (Ogg/Vorbis/Opus)
+  { offset: 0, bytes: [0x49, 0x44, 0x33] }, // ID3 (MP3 with ID3v2 tag)
+  { offset: 0, bytes: [0xff, 0xfb] }, // MP3 sync word (MPEG1 Layer3)
+  { offset: 0, bytes: [0xff, 0xf3] }, // MP3 sync word (MPEG2 Layer3)
+  { offset: 0, bytes: [0xff, 0xf2] }, // MP3 sync word (MPEG2.5 Layer3)
+  { offset: 0, bytes: [0x66, 0x4c, 0x61, 0x43] }, // fLaC (FLAC)
+  { offset: 0, bytes: [0x52, 0x49, 0x46, 0x46] }, // RIFF (WAV/AVI)
+  { offset: 4, bytes: [0x66, 0x74, 0x79, 0x70] }, // ftyp (MP4/M4A/MOV)
+  { offset: 0, bytes: [0x1a, 0x45, 0xdf, 0xa3] }, // EBML (Matroska/WebM)
+  { offset: 0, bytes: [0x89, 0x50, 0x4e, 0x47] }, // PNG
+  { offset: 0, bytes: [0x47, 0x49, 0x46, 0x38] }, // GIF87a/GIF89a
+];
+
+function hasBinaryMagic(buffer: Buffer): boolean {
+  for (const sig of BINARY_MAGIC_SIGNATURES) {
+    if (buffer.length < sig.offset + sig.bytes.length) continue;
+    let match = true;
+    for (let i = 0; i < sig.bytes.length; i++) {
+      if (buffer[sig.offset + i] !== sig.bytes[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return true;
+  }
+  return false;
+}
+
 function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefined {
   if (!buffer || buffer.length < 2) {
     return undefined;
@@ -129,6 +164,12 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
   }
   if (b0 === 0xfe && b1 === 0xff) {
     return "utf-16be";
+  }
+  // Reject known binary formats before the null-byte heuristic.
+  // Binary files (e.g. Ogg/Opus audio) can have high null-byte ratios
+  // that fool the UTF-16 detection.
+  if (hasBinaryMagic(buffer)) {
+    return undefined;
   }
   const sampleLen = Math.min(buffer.length, 2048);
   let zeroCount = 0;
@@ -145,6 +186,11 @@ function resolveUtf16Charset(buffer?: Buffer): "utf-16le" | "utf-16be" | undefin
 
 function looksLikeUtf8Text(buffer?: Buffer): boolean {
   if (!buffer || buffer.length === 0) {
+    return false;
+  }
+  // Check for known binary file signatures first -- these formats may have
+  // ASCII-heavy headers (e.g. Ogg "OggS", "OpusHead") that fool the printable ratio.
+  if (hasBinaryMagic(buffer)) {
     return false;
   }
   const sampleLen = Math.min(buffer.length, 4096);
