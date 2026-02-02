@@ -14,6 +14,41 @@ import {
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
 const FALLBACK_SUMMARY =
   "Summary unavailable due to context limits. Older messages were truncated.";
+const MAX_PRESERVED_USER_MSG_CHARS = 2000;
+
+function extractLastUserMessageText(messages: AgentMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== "object") continue;
+    if ((msg as { role?: unknown }).role !== "user") continue;
+
+    const content = (msg as { content?: unknown }).content;
+    let text: string | null = null;
+
+    if (typeof content === "string") {
+      text = content;
+    } else if (Array.isArray(content)) {
+      const parts: string[] = [];
+      for (const block of content) {
+        if (block && typeof block === "object") {
+          const rec = block as { type?: unknown; text?: unknown };
+          if (rec.type === "text" && typeof rec.text === "string") {
+            parts.push(rec.text);
+          }
+        }
+      }
+      text = parts.length > 0 ? parts.join("\n") : null;
+    }
+
+    if (text && text.trim()) {
+      if (text.length > MAX_PRESERVED_USER_MSG_CHARS) {
+        return text.slice(0, MAX_PRESERVED_USER_MSG_CHARS) + "...";
+      }
+      return text.trim();
+    }
+  }
+  return null;
+}
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -299,6 +334,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary += toolFailureSection;
       summary += fileOpsSummary;
 
+      // Preserve the last user message verbatim so it survives compaction
+      const lastUserText = extractLastUserMessageText(preparation.messagesToSummarize);
+      if (lastUserText) {
+        summary += `\n\n## Last User Message (Verbatim)\n\n${lastUserText}`;
+      }
+
       return {
         compaction: {
           summary,
@@ -313,9 +354,14 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           error instanceof Error ? error.message : String(error)
         }`,
       );
+      // Preserve the last user message even in fallback
+      const lastUserTextFallback = extractLastUserMessageText(preparation.messagesToSummarize);
+      const fallbackWithUser = lastUserTextFallback
+        ? `${fallbackSummary}\n\n## Last User Message (Verbatim)\n\n${lastUserTextFallback}`
+        : fallbackSummary;
       return {
         compaction: {
-          summary: fallbackSummary,
+          summary: fallbackWithUser,
           firstKeptEntryId: preparation.firstKeptEntryId,
           tokensBefore: preparation.tokensBefore,
           details: { readFiles, modifiedFiles },
