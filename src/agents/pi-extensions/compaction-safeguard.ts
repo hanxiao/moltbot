@@ -148,9 +148,11 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const model = ctx.model;
     if (!model) {
-      // ctx.model may be undefined when extensionRunner.initialize() was not called
-      // (e.g. embedded runner mode). Fall through to built-in compaction which has
-      // correct model access via AgentSession.model.
+      // Defense-in-depth: getModel is now initialized on the extensionRunner after
+      // session creation (see attempt.ts and compact.ts), so ctx.model should always
+      // be available. This fallback remains as a secondary safeguard in case the
+      // initialization is missed or fails. Falls through to built-in compaction which
+      // has correct model access via AgentSession.model.
       return undefined;
     }
 
