@@ -148,18 +148,32 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
     const model = ctx.model;
     if (!model) {
-      // Defense-in-depth: getModel is now initialized on the extensionRunner after
-      // session creation (see attempt.ts and compact.ts), so ctx.model should always
-      // be available. This fallback remains as a secondary safeguard in case the
-      // initialization is missed or fails. Falls through to built-in compaction which
-      // has correct model access via AgentSession.model.
-      return undefined;
+      // getModel is initialized on the extensionRunner after session creation
+      // (see attempt.ts and compact.ts). If ctx.model is still undefined, return
+      // the fallback summary with tool failures and file ops rather than bypassing
+      // the extension entirely.
+      return {
+        compaction: {
+          summary: fallbackSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
 
     const apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      // Fall through to built-in compaction rather than producing an empty summary.
-      return undefined;
+      // Return fallback summary with tool failures and file ops rather than
+      // bypassing the extension.
+      return {
+        compaction: {
+          summary: fallbackSummary,
+          firstKeptEntryId: preparation.firstKeptEntryId,
+          tokensBefore: preparation.tokensBefore,
+          details: { readFiles, modifiedFiles },
+        },
+      };
     }
 
     try {
